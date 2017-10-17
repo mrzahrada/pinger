@@ -43,14 +43,18 @@ func (d *delegate) Shutdown() {
 type Pinger struct {
 	ring      *chord.Ring
 	transport *Transport
-
-	replicas int
+	store     *Store
+	replicas  int
 }
 
-func NewPinger(nodeAddr, existingAddr string) (*Pinger, error) {
+func NewPinger(nodeAddr, existingAddr, pingerDir string) (*Pinger, error) {
+
+	store, err := NewStore(pingerDir)
+	if err != nil {
+		return nil, err
+	}
 
 	delegate, _ := NewDelegate()
-
 	config := chord.DefaultConfig(nodeAddr)
 	{
 		NumSuccessors = 3
@@ -77,6 +81,7 @@ func NewPinger(nodeAddr, existingAddr string) (*Pinger, error) {
 	return &Pinger{
 		ring:      ring,
 		transport: transport,
+		store:     store,
 		replicas:  2,
 	}, nil
 }
