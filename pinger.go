@@ -40,6 +40,14 @@ func (d *delegate) Shutdown() {
 	fmt.Println("shutdown")
 }
 
+type PingerService interface {
+	Get(key string) (*Job, error)
+	Put(j *Job) error
+	Update(key string, j *Job) error
+	Delete(key string) error
+	//List(start, end time.Time) ([]*Job, error)
+}
+
 type Pinger struct {
 	ring      *chord.Ring
 	transport *Transport
