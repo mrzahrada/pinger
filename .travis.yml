@@ -1,0 +1,13 @@
+language: go
+
+go:
+  - 1.9.x
+  - master
+
+install:
+  - go get github.com/mattn/goveralls
+  - go get -u github.com/golang/lint/golint
+
+script:
+  - go build github.com/mrzahrada/pinger
+  - $HOME/gopath/bin/goveralls -service=travis-ci
