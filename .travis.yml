@@ -7,7 +7,9 @@ go:
 install:
   - go get github.com/mattn/goveralls
   - go get -u github.com/golang/lint/golint
+  - go get -u github.com/golang/dep
 
 script:
+  - $HOME/gopath/bin/dep init
   - go build github.com/mrzahrada/pinger
   - $HOME/gopath/bin/goveralls -service=travis-ci
