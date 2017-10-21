@@ -40,30 +40,42 @@ func (d *delegate) Shutdown() {
 	fmt.Println("shutdown")
 }
 
+type PingerService interface {
+	Get(key string) (*Job, error)
+	Put(j *Job) error
+	Update(key string, j *Job) error
+	Delete(key string) error
+	//List(start, end time.Time) ([]*Job, error)
+}
+
 type Pinger struct {
 	ring      *chord.Ring
 	transport *Transport
-
-	replicas int
+	store     *Store
+	replicas  int
 }
 
-func NewPinger(nodeAddr, existingAddr string) (*Pinger, error) {
+func NewPinger(nodeAddr, existingAddr, pingerDir string) (PingerService, error) {
+
+	store, err := NewStore(pingerDir)
+	if err != nil {
+		return nil, err
+	}
 
 	delegate, _ := NewDelegate()
-
 	config := chord.DefaultConfig(nodeAddr)
 	{
-		NumSuccessors = 3
-		Delegate = delegate
+		config.NumSuccessors = 3
+		config.Delegate = delegate
 	}
 	timeout := time.Duration(time.Second)
-	transport, err := NewTransport(nodeAddr, timeout)
+	transport, err := NewTransport(nodeAddr, timeout, store)
 	if err != nil {
 		return nil, err
 	}
 
 	ring := &chord.Ring{}
-	if existing == "" {
+	if existingAddr == "" {
 		ring, err = chord.Create(config, transport)
 	} else {
 		ring, err = chord.Join(config, transport, existingAddr)
@@ -74,19 +86,20 @@ func NewPinger(nodeAddr, existingAddr string) (*Pinger, error) {
 	}
 	sort.Sort(ring)
 
-	return &Pinger{
+	return Pinger{
 		ring:      ring,
 		transport: transport,
+		store:     store,
 		replicas:  2,
 	}, nil
 }
 
 func (p *Pinger) Shutdown() {
 	p.ring.Shutdown()
-	p.transport.Shutdonw()
+	p.transport.Shutdown()
 }
 
-func (p *Pinger) Get(key string) (*Job, error) {
+func (p Pinger) Get(key string) (*Job, error) {
 	// get all replicas
 	nodes, err := p.ring.Lookup(p.replicas, []byte(key))
 	if err != nil {
@@ -95,7 +108,7 @@ func (p *Pinger) Get(key string) (*Job, error) {
 	job := &Job{}
 	ok := false
 	for _, node := range nodes {
-		job, err = p.transport.RequestJob(node.Host, key)
+		job, err = p.transport.SendPingerGetRequest(node.Host, key)
 		if err != nil {
 			continue
 		}
@@ -107,9 +120,8 @@ func (p *Pinger) Get(key string) (*Job, error) {
 	return job, nil
 }
 
-func (p *Pinger) Put(j *Job) error {
+func (p Pinger) Put(j *Job) error {
 	key := j.Key()
-	data := []byte{} // TODO: serialize job
 
 	nodes, err := p.ring.Lookup(p.replicas, []byte(key))
 	if err != nil {
@@ -117,7 +129,7 @@ func (p *Pinger) Put(j *Job) error {
 	}
 
 	for _, node := range nodes {
-		err := p.transport.SaveJob(node.Host, key, data)
+		err := p.transport.SendPingerPutRequest(node.Host, key, j)
 		if err != nil {
 			// TODO: failed to save data >> cleanup
 			return err
@@ -126,14 +138,14 @@ func (p *Pinger) Put(j *Job) error {
 	return nil
 }
 
-func (p *Pinger) Update(key string, j *Job) error {
+func (p Pinger) Update(key string, j *Job) error {
 	if err := p.Delete(key); err != nil {
 		return err
 	}
 	return p.Put(j)
 }
 
-func (p *Pinger) Delete(key string) error {
+func (p Pinger) Delete(key string) error {
 
 	nodes, err := p.ring.Lookup(p.replicas, []byte(key))
 	if err != nil {
@@ -141,7 +153,7 @@ func (p *Pinger) Delete(key string) error {
 	}
 
 	for _, node := range nodes {
-		err := p.transport.DeleteJob(node.Host, key)
+		err := p.transport.SendPingerDeleteRequest(node.Host, key)
 		if err != nil {
 			return err
 		}

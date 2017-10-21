@@ -1,4 +1,3 @@
-// TODO: implement pinger methods
 // TODO: connect transport to store
 
 package main
@@ -30,6 +29,7 @@ type Transport struct {
 	poolLock sync.Mutex
 	pool     map[string][]*tcpOutConn
 	shutdown int32
+	store    *Store
 }
 
 type tcpOutConn struct {
@@ -49,7 +49,9 @@ const (
 	tcpFindSucReq
 	tcpClearPredReq
 	tcpSkipSucReq
-	tcpPingerReq
+	tcpJobGet
+	tcpJobPut
+	tcpJobDel
 )
 
 type tcpHeader struct {
@@ -88,14 +90,17 @@ type tcpBodyBoolError struct {
 	Err error
 }
 type tcpBodyPingerReq struct {
-	Action string
-	Key    string
-	Data   []byte
+	Key string
+	Job *Job
+}
+type tcpBodyGetJob struct {
+	Job *Job
+	Err error
 }
 
 // Creates a new TCP transport on the given listen address with the
 // configured timeout duration.
-func NewTransport(listen string, timeout time.Duration) (*Transport, error) {
+func NewTransport(listen string, timeout time.Duration, store *Store) (*Transport, error) {
 	// Try to start the listener
 	sock, err := net.Listen("tcp", listen)
 	if err != nil {
@@ -116,7 +121,9 @@ func NewTransport(listen string, timeout time.Duration) (*Transport, error) {
 		maxIdle: maxIdle,
 		local:   local,
 		inbound: inbound,
-		pool:    pool}
+		pool:    pool,
+		store:   store,
+	}
 
 	// Listen for connections
 	go tcp.listen()
@@ -205,7 +212,57 @@ func (t *Transport) setupConn(c *net.TCPConn) {
 	c.SetKeepAlive(true)
 }
 
-func (t *Transport) SendPingerRequest(host, action, key string, data []byte) error {
+func (t *Transport) SendPingerGetRequest(host string, key string) (*Job, error) {
+	// Get a conn
+	out, err := t.getConn(host)
+	if err != nil {
+		return nil, err
+	}
+
+	// Response channels
+	respChan := make(chan *Job, 1)
+	errChan := make(chan error, 1)
+
+	go func() {
+		// Send a list command
+		out.header.ReqType = tcpJobGet
+		body := tcpBodyPingerReq{Key: key, Job: new(Job)}
+		if err := out.enc.Encode(&out.header); err != nil {
+			errChan <- err
+			return
+		}
+		if err := out.enc.Encode(&body); err != nil {
+			errChan <- err
+			return
+		}
+
+		// Read in the response
+		resp := tcpBodyGetJob{}
+		if err := out.dec.Decode(&resp); err != nil {
+			errChan <- err
+		}
+
+		// Return the connection
+		t.returnConn(out)
+		if resp.Err == nil {
+			respChan <- resp.Job
+		} else {
+			errChan <- resp.Err
+		}
+	}()
+
+	select {
+	case <-time.After(t.timeout):
+		return nil, fmt.Errorf("Command timed out!")
+	case err := <-errChan:
+		return nil, err
+	case res := <-respChan:
+		return res, nil
+	}
+}
+
+func (t *Transport) SendPingerPutRequest(host, key string, job *Job) error {
+	fmt.Println("going to send put request", key, job)
 	out, err := t.getConn(host)
 	if err != nil {
 		return err
@@ -213,12 +270,50 @@ func (t *Transport) SendPingerRequest(host, action, key string, data []byte) err
 
 	errChan := make(chan error, 1)
 	go func() {
-		out.header.ReqType = tcpPingerReq
-		body := tcpBodyPingerReq{
-			Action: action,
-			Key:    key,
-			Data:   data,
+		out.header.ReqType = tcpJobPut
+		body := tcpBodyPingerReq{Key: key, Job: job}
+		if err := out.enc.Encode(&out.header); err != nil {
+			errChan <- err
+			return
 		}
+		if err := out.enc.Encode(&body); err != nil {
+			errChan <- err
+			return
+		}
+
+		// Read in the response
+		resp := tcpBodyError{}
+		if err := out.dec.Decode(&resp); err != nil {
+			errChan <- err
+		}
+
+		// Return the connection
+		t.returnConn(out)
+		if resp.Err == nil {
+			errChan <- nil
+		} else {
+			errChan <- resp.Err
+		}
+	}()
+
+	select {
+	case <-time.After(t.timeout):
+		return fmt.Errorf("Command timed out!")
+	case err := <-errChan:
+		fmt.Println("send put err")
+		return err
+	}
+}
+func (t *Transport) SendPingerDeleteRequest(host, key string) error {
+	out, err := t.getConn(host)
+	if err != nil {
+		return err
+	}
+
+	errChan := make(chan error, 1)
+	go func() {
+		out.header.ReqType = tcpJobDel
+		body := tcpBodyPingerReq{Key: key, Job: new(Job)}
 		if err := out.enc.Encode(&out.header); err != nil {
 			errChan <- err
 			return
@@ -848,16 +943,32 @@ func (t *Transport) handleConn(conn *net.TCPConn) {
 					body.Target.Host, body.Target.String())
 			}
 
-		case tcpPingerReq:
+		case tcpJobPut:
 			body := tcpBodyPingerReq{}
 			if err := dec.Decode(&body); err != nil {
 				log.Printf("[ERR] Failed to decode TCP body! Got %s", err)
 			}
 			//TODO: pass data to pinger
-			fmt.Println("received pinger request for key:", body.Key)
+			fmt.Println("received put request for key:", body.Key)
+
+			err := t.store.CreateJob(body.Key, body.Job)
 
 			// Generate a response
-			resp := tcpBodyError{}
+			resp := tcpBodyError{Err: err}
+			sendResp = &resp
+
+		case tcpJobGet:
+			body := tcpBodyPingerReq{}
+			if err := dec.Decode(&body); err != nil {
+				log.Printf("[ERR] Failed to decode TCP body! Got %s", err)
+			}
+			//TODO: pass data to pinger
+			fmt.Println("received get request for key:", body.Key)
+
+			job, err := t.store.Job(body.Key)
+
+			// Generate a response
+			resp := tcpBodyGetJob{Job: job, Err: err}
 			sendResp = &resp
 
 		default:
