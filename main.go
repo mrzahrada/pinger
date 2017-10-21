@@ -1,11 +1,9 @@
 package main
 
 import (
-	"log"
-	"net/http"
+	"fmt"
 	"os"
-
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"time"
 )
 
 func main() {
@@ -13,32 +11,51 @@ func main() {
 	nodeAddr := os.Getenv("PINGER_NODE_ADDR")
 	existingAddr := os.Getenv("PINGER_EXISTING_ADDR")
 	pingerDir := os.Getenv("PINGER_DIR")
-
-	logger := log.NewLogfmtLogger(os.Stderr)
+	apiAddr := os.Getenv("PINGER_API_ADDR")
+	_ = apiAddr
+	//logger := log.NewLogfmtLogger(os.Stderr)
 
 	svc, err := NewPinger(nodeAddr, existingAddr, pingerDir)
 	if err != nil {
 		panic(err)
 	}
-	svc = loggingMiddleware{logger, svc}
+	//svc = loggingMiddleware{logger, svc}
 
-	getHandler := httptransport.NewServer(
-		makeGetEndpoint(svc),
-		decodeGetRequest,
-		encodeResponse,
-	)
+	for {
+		time.Sleep(3 * time.Second)
+		job1 := NewRandomJob()
+		err = svc.Put(job1)
+		if err != nil {
+			panic(err)
+		}
+		time.Sleep(time.Second)
 
-	putHandler := httptransport.NewServer(
-		makePutEndpoint(svc),
-		decodePutRequest,
-		encodeResponse,
-	)
+		job, err := svc.Get(job1.Key())
+		if err != nil {
+			panic(err)
+		}
+		fmt.Println("job:", job)
 
-	// TODO: this looks stupid, use rest methods
-	http.Handle("/get", uppercaseHandler)
-	http.Handle("/put", countHandler)
-	http.Handle("/metrics", promhttp.Handler())
-	logger.Log("msg", "HTTP", "addr", ":8080")
-	logger.Log("err", http.ListenAndServe(":8080", nil))
+	}
 
+	/*
+		getHandler := httptransport.NewServer(
+			makeGetEndpoint(svc),
+			decodeGetRequest,
+			encodeResponse,
+		)
+
+		putHandler := httptransport.NewServer(
+			makePutEndpoint(svc),
+			decodePutRequest,
+			encodeResponse,
+		)
+
+		// TODO: this looks stupid, use rest methods
+		http.Handle("/get", getHandler)
+		http.Handle("/put", putHandler)
+		//http.Handle("/metrics", promhttp.Handler())
+		//logger.Log("msg", "HTTP", "addr", ":8080")
+		logger.Log("err", http.ListenAndServe(apiAddr, nil))
+	*/
 }

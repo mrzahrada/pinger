@@ -19,6 +19,16 @@ func NewStore(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucket([]byte("jobs"))
+		return err
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return &Store{db: db}, nil
 }
 
 func (s *Store) Close() {
@@ -31,6 +41,7 @@ func (s *Store) CreateJob(key string, j *Job) error {
 
 	return s.db.Update(func(tx *bolt.Tx) error {
 		root := tx.Bucket([]byte("jobs"))
+
 		_, err := root.CreateBucket([]byte(stateKey))
 		if err != nil {
 			return err // job already exists
@@ -44,7 +55,7 @@ func (s *Store) Job(key string) (*Job, error) {
 	err := s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("jobs"))
 		v := b.Get([]byte(key))
-		return json.Unmarshal(j, v)
+		return json.Unmarshal(v, job)
 	})
 	return job, err
 }
@@ -58,12 +69,11 @@ func (s *Store) JobsRange(from, to time.Time) ([]*Job, error) {
 		// Assume our events bucket exists and has RFC3339 encoded time keys.
 		c := tx.Bucket([]byte("Events")).Cursor()
 
-		// Iterate over the 90's.
 		for k, v := c.Seek(min); k != nil && bytes.Compare(k, max) <= 0; k, v = c.Next() {
 			fmt.Printf("%s: %s\n", k, v)
 			job := new(Job)
 			// Note single corrupted job should not end function
-			if err := json.Unmarshal(job, v); err != nil {
+			if err := json.Unmarshal(v, job); err != nil {
 				return err
 			}
 			jobs = append(jobs, job)
@@ -86,10 +96,11 @@ func (s *Store) SetState(key, state string) error {
 		}
 		buf := make([]byte, 8)
 		binary.BigEndian.PutUint64(buf, uint64(stateId))
-		return b.Put(buf, []byte(value))
+		return b.Put(buf, []byte(state))
 	})
 }
 
+/*
 func (s *Store) ListStates(key string) ([]string, error) {
 	states = []string{}
 	return s.db.View(func(tx *bolt.Tx) error {
@@ -100,4 +111,4 @@ func (s *Store) ListStates(key string) ([]string, error) {
 		})
 		return nil
 	})
-}
+}*/

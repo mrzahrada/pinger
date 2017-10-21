@@ -15,7 +15,7 @@ func makeGetEndpoint(svc PingerService) endpoint.Endpoint {
 		if err != nil {
 			return getResponse{job, err.Error()}, nil
 		}
-		return getResponse{SavedJob: job, Err: ""}, nil
+		return getResponse{Job: job, Err: ""}, nil
 	}
 }
 
@@ -50,18 +50,19 @@ func encodeResponse(_ context.Context, w http.ResponseWriter, response interface
 	return json.NewEncoder(w).Encode(response)
 }
 
-type getrequest struct {
-	key string `json:"key"`
+type getRequest struct {
+	Key string `json:"key"`
 }
 
-type putrequest struct {
+type putRequest struct {
 	NewJob *Job `json:"job"`
 }
 
-type putresponse struct {
-	SavedJob *job   `json:"job"`
+type putResponse struct {
+	SavedJob *Job   `json:"job"`
 	Err      string `json:"err, omitempty"`
 }
-type getresponse struct {
+type getResponse struct {
+	Job *Job   `json:"job"`
 	Err string `json:"err, omitempty"`
 }
